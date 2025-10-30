@@ -1,0 +1,18 @@
+# Exclude everything by default to avoid shipping the full repo as build context
+**
+
+# Allow the files the dashboard build requires
+!Directory.Build.props
+!Directory.Build.targets
+!Directory.Packages.props
+!NuGet.config
+!global.json
+
+# Allow the source tree (contains Aspire.Dashboard and shared code)
+!src/**
+
+# Allow engineering targets required by Directory.Build.targets
+!eng/**
+
+# Keep the dockerfile available inside the context
+!src/Aspire.Dashboard/Dockerfile

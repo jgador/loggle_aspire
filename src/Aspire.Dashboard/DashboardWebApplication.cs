@@ -21,6 +21,7 @@ using Aspire.Dashboard.Otlp;
 using Aspire.Dashboard.Otlp.Grpc;
 using Aspire.Dashboard.Otlp.Http;
 using Aspire.Dashboard.Otlp.Storage;
+using Aspire.Dashboard.Persistence;
 using Aspire.Dashboard.Telemetry;
 using Aspire.Dashboard.Utils;
 using Aspire.Hosting;
@@ -30,6 +31,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.HttpsPolicy;
@@ -282,6 +284,11 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         builder.Services.AddGrpc();
         builder.Services.AddSingleton<TelemetryRepository>();
         builder.Services.AddTransient<StructuredLogsViewModel>();
+        builder.Services.Configure<ElasticPersistenceOptions>(
+            builder.Configuration.GetSection(ElasticPersistenceOptions.SectionName));
+        builder.Services.AddSingleton<DashboardCircuitTracker>();
+        builder.Services.AddSingleton<CircuitHandler>(sp => sp.GetRequiredService<DashboardCircuitTracker>());
+        builder.Services.AddHostedService<ElasticLogBackfillService>();
 
         builder.Services.AddTransient<OtlpLogsService>();
         builder.Services.AddTransient<OtlpTraceService>();
