@@ -32,6 +32,14 @@ internal static class DashboardConfigNames
     public static readonly ConfigName DashboardFrontendBrowserTokenName = new("Dashboard:Frontend:BrowserToken", "DASHBOARD__FRONTEND__BROWSERTOKEN");
     public static readonly ConfigName DashboardFrontendMaxConsoleLogCountName = new("Dashboard:Frontend:MaxConsoleLogCount", "DASHBOARD__FRONTEND__MAXCONSOLELOGCOUNT");
     public static readonly ConfigName DashboardFrontendPublicUrlName = new("Dashboard:Frontend:PublicUrl", "DASHBOARD__FRONTEND__PUBLICURL");
+    public static readonly ConfigName DashboardLogStorageModeName = new("Dashboard:LogStorage:Mode", KnownConfigNames.DashboardLogStorageMode);
+    public static readonly ConfigName DashboardLogStorageElasticEndpointName = new("Dashboard:LogStorage:Elasticsearch:Endpoint", KnownConfigNames.DashboardLogStorageElasticEndpoint);
+    public static readonly ConfigName DashboardLogStorageElasticDataStreamName = new("Dashboard:LogStorage:Elasticsearch:DataStream", KnownConfigNames.DashboardLogStorageElasticDataStream);
+    public static readonly ConfigName DashboardLogStorageElasticUsernameName = new("Dashboard:LogStorage:Elasticsearch:Username", KnownConfigNames.DashboardLogStorageElasticUsername);
+    public static readonly ConfigName DashboardLogStorageElasticPasswordName = new("Dashboard:LogStorage:Elasticsearch:Password", KnownConfigNames.DashboardLogStorageElasticPassword);
+    public static readonly ConfigName DashboardLogStorageElasticDisableCertificateValidationName = new("Dashboard:LogStorage:Elasticsearch:DisableServerCertificateValidation", KnownConfigNames.DashboardLogStorageElasticDisableCertificateValidation);
+    public static readonly ConfigName DashboardLogStorageElasticInitialLoadCountName = new("Dashboard:LogStorage:Elasticsearch:InitialLoadCount", KnownConfigNames.DashboardLogStorageElasticInitialLoadCount);
+    public static readonly ConfigName DashboardLogStorageElasticIncrementalBatchSizeName = new("Dashboard:LogStorage:Elasticsearch:IncrementalBatchSize", KnownConfigNames.DashboardLogStorageElasticIncrementalBatchSize);
     public static readonly ConfigName ResourceServiceClientAuthModeName = new("Dashboard:ResourceServiceClient:AuthMode", "DASHBOARD__RESOURCESERVICECLIENT__AUTHMODE");
     public static readonly ConfigName ResourceServiceClientCertificateSourceName = new("Dashboard:ResourceServiceClient:ClientCertificate:Source", "DASHBOARD__RESOURCESERVICECLIENT__CLIENTCERTIFICATE__SOURCE");
     public static readonly ConfigName ResourceServiceClientCertificateFilePathName = new("Dashboard:ResourceServiceClient:ClientCertificate:FilePath", "DASHBOARD__RESOURCESERVICECLIENT__CLIENTCERTIFICATE__FILEPATH");

@@ -18,6 +18,7 @@ using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Model.Assistant;
 using Aspire.Dashboard.Model.Assistant.Prompts;
 using Aspire.Dashboard.Otlp;
+using Aspire.Dashboard.Otlp.Persistence;
 using Aspire.Dashboard.Otlp.Grpc;
 using Aspire.Dashboard.Otlp.Http;
 using Aspire.Dashboard.Otlp.Storage;
@@ -280,6 +281,7 @@ public sealed class DashboardWebApplication : IAsyncDisposable
 
         // OTLP services.
         builder.Services.AddGrpc();
+        builder.Services.AddSingleton<ILogPersistence, ElasticLogPersistence>();
         builder.Services.AddSingleton<TelemetryRepository>();
         builder.Services.AddTransient<StructuredLogsViewModel>();
 

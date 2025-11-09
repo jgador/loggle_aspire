@@ -4,9 +4,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Globalization;
 using System.Runtime.InteropServices;
-using System.Text;
 using Aspire.Dashboard.Configuration;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Otlp.Model;
@@ -17,6 +15,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.FluentUI.AspNetCore.Components;
 using OpenTelemetry.Proto.Logs.V1;
 using OpenTelemetry.Proto.Metrics.V1;
+using OpenTelemetry.Proto.Common.V1;
 using OpenTelemetry.Proto.Resource.V1;
 using OpenTelemetry.Proto.Trace.V1;
 using static OpenTelemetry.Proto.Trace.V1.Span.Types;
@@ -52,6 +51,10 @@ public sealed class TelemetryRepository : IDisposable
     private readonly List<OtlpSpanLink> _spanLinks = new();
     private readonly List<IDisposable> _peerResolverSubscriptions = new();
     internal readonly OtlpContext _otlpContext;
+    private readonly Aspire.Dashboard.Otlp.Persistence.ILogPersistence? _logPersistence;
+    private readonly HashSet<string> _persistedLogIds = new(StringComparer.Ordinal);
+    private bool _hasLoadedPersistedLogs;
+    private DateTime? _lastPersistedTimestamp;
 
     public bool HasDisplayedMaxLogLimitMessage { get; set; }
     public Message? MaxLogLimitMessage { get; set; }
@@ -63,7 +66,7 @@ public sealed class TelemetryRepository : IDisposable
     internal List<OtlpSpanLink> SpanLinks => _spanLinks;
     internal List<Subscription> TracesSubscriptions => _tracesSubscriptions;
 
-    public TelemetryRepository(ILoggerFactory loggerFactory, IOptions<DashboardOptions> dashboardOptions, PauseManager pauseManager, IEnumerable<IOutgoingPeerResolver> outgoingPeerResolvers)
+    public TelemetryRepository(ILoggerFactory loggerFactory, IOptions<DashboardOptions> dashboardOptions, PauseManager pauseManager, IEnumerable<IOutgoingPeerResolver> outgoingPeerResolvers, Aspire.Dashboard.Otlp.Persistence.ILogPersistence? logPersistence = null)
     {
         _logger = loggerFactory.CreateLogger(typeof(TelemetryRepository));
         _otlpContext = new OtlpContext
@@ -73,6 +76,7 @@ public sealed class TelemetryRepository : IDisposable
         };
         _pauseManager = pauseManager;
         _outgoingPeerResolvers = outgoingPeerResolvers.ToArray();
+        _logPersistence = logPersistence;
         _logs = new(_otlpContext.Options.MaxLogCount);
         _traces = new(_otlpContext.Options.MaxTraceCount);
         _traces.ItemRemovedForCapacity += TracesItemRemovedForCapacity;
@@ -308,6 +312,8 @@ public sealed class TelemetryRepository : IDisposable
             return;
         }
 
+        List<OtlpLogEntry>? persistenceBatch = _logPersistence is { IsEnabled: true } ? new List<OtlpLogEntry>() : null;
+
         foreach (var rl in resourceLogs)
         {
             OtlpResourceView resourceView;
@@ -322,13 +328,18 @@ public sealed class TelemetryRepository : IDisposable
                 continue;
             }
 
-            AddLogsCore(context, resourceView, rl.ScopeLogs);
+            AddLogsCore(context, resourceView, rl.ScopeLogs, persistenceBatch);
+        }
+
+        if (persistenceBatch is { Count: > 0 })
+        {
+            _logPersistence!.Persist(persistenceBatch, CancellationToken.None);
         }
 
         RaiseSubscriptionChanged(_logSubscriptions);
     }
 
-    public void AddLogsCore(AddContext context, OtlpResourceView resourceView, RepeatedField<ScopeLogs> scopeLogs)
+    public void AddLogsCore(AddContext context, OtlpResourceView resourceView, RepeatedField<ScopeLogs> scopeLogs, List<OtlpLogEntry>? persistenceBatch = null)
     {
         _logsLock.EnterWriteLock();
 
@@ -347,42 +358,8 @@ public sealed class TelemetryRepository : IDisposable
                     try
                     {
                         var logEntry = new OtlpLogEntry(record, resourceView, scope, _otlpContext);
-
-                        // Insert log entry in the correct position based on timestamp.
-                        // Logs can be added out of order by different services.
-                        var added = false;
-                        for (var i = _logs.Count - 1; i >= 0; i--)
-                        {
-                            if (logEntry.TimeStamp > _logs[i].TimeStamp)
-                            {
-                                _logs.Insert(i + 1, logEntry);
-                                added = true;
-                                break;
-                            }
-                        }
-                        if (!added)
-                        {
-                            _logs.Insert(0, logEntry);
-                        }
-
-                        // For log entries error and above, increment the unviewed count if there are no read log subscriptions for the resource.
-                        // We don't increment the count if there are active read subscriptions because the count will be quickly decremented when the subscription callback is run.
-                        // Notifying the user there are errors and then immediately clearing the notification is confusing.
-                        if (logEntry.IsError)
-                        {
-                            if (!_logSubscriptions.Any(s => s.SubscriptionType == SubscriptionType.Read && (s.ResourceKey == resourceView.ResourceKey || s.ResourceKey == null)))
-                            {
-                                ref var count = ref CollectionsMarshal.GetValueRefOrAddDefault(_resourceUnviewedErrorLogs, resourceView.ResourceKey, out _);
-                                // Adds to dictionary if not present.
-                                count++;
-                            }
-                        }
-
-                        foreach (var kvp in logEntry.Attributes)
-                        {
-                            _logPropertyKeys.Add((resourceView.Resource, kvp.Key));
-                        }
-                        context.SuccessCount++;
+                        AddLogEntryInternal(logEntry, resourceView, context);
+                        persistenceBatch?.Add(logEntry);
                     }
                     catch (Exception ex)
                     {
@@ -398,8 +375,233 @@ public sealed class TelemetryRepository : IDisposable
         }
     }
 
+    private void AddLogEntryInternal(OtlpLogEntry logEntry, OtlpResourceView resourceView, AddContext? context, bool skipUnviewedErrorIncrement = false)
+    {
+        // Insert log entry in the correct position based on timestamp.
+        // Logs can be added out of order by different services.
+        var added = false;
+        for (var i = _logs.Count - 1; i >= 0; i--)
+        {
+            if (logEntry.TimeStamp > _logs[i].TimeStamp)
+            {
+                _logs.Insert(i + 1, logEntry);
+                added = true;
+                break;
+            }
+        }
+        if (!added)
+        {
+            _logs.Insert(0, logEntry);
+        }
+
+        // For log entries error and above, increment the unviewed count if there are no read log subscriptions for the resource.
+        if (!skipUnviewedErrorIncrement && logEntry.IsError)
+        {
+            if (!_logSubscriptions.Any(s => s.SubscriptionType == SubscriptionType.Read && (s.ResourceKey == resourceView.ResourceKey || s.ResourceKey == null)))
+            {
+                ref var count = ref CollectionsMarshal.GetValueRefOrAddDefault(_resourceUnviewedErrorLogs, resourceView.ResourceKey, out _);
+                // Adds to dictionary if not present.
+                count++;
+            }
+        }
+
+        foreach (var kvp in logEntry.Attributes)
+        {
+            _logPropertyKeys.Add((resourceView.Resource, kvp.Key));
+        }
+
+        if (context is not null)
+        {
+            context.SuccessCount++;
+        }
+    }
+
+    private void EnsurePersistedLogsLoaded()
+    {
+        if (_logPersistence is not { IsEnabled: true })
+        {
+            return;
+        }
+
+        if (!_hasLoadedPersistedLogs)
+        {
+            var hits = _logPersistence.GetLatest(_otlpContext.Options.MaxLogCount, CancellationToken.None);
+            if (hits.Count > 0)
+            {
+                AddPersistedHits(hits, treatAsExisting: true);
+            }
+
+            _hasLoadedPersistedLogs = true;
+            return;
+        }
+
+        IReadOnlyList<Aspire.Dashboard.Otlp.Persistence.PersistedLogHit> incrementalHits;
+        if (_lastPersistedTimestamp is null)
+        {
+            incrementalHits = _logPersistence.GetLatest(_otlpContext.Options.MaxLogCount, CancellationToken.None);
+            if (incrementalHits.Count == 0)
+            {
+                _lastPersistedTimestamp = DateTime.UtcNow.AddSeconds(-1);
+                return;
+            }
+        }
+        else
+        {
+            incrementalHits = _logPersistence.GetSince(_lastPersistedTimestamp.Value, _otlpContext.Options.MaxLogCount, CancellationToken.None);
+        }
+
+        if (incrementalHits.Count > 0)
+        {
+            AddPersistedHits(incrementalHits, treatAsExisting: false);
+        }
+    }
+
+    private void AddPersistedHits(IReadOnlyList<Aspire.Dashboard.Otlp.Persistence.PersistedLogHit> hits, bool treatAsExisting)
+    {
+        var addedAny = false;
+
+        _logsLock.EnterWriteLock();
+
+        try
+        {
+            foreach (var hit in hits)
+            {
+                if (hit.Document is null)
+                {
+                    continue;
+                }
+
+                var persistenceKey = !string.IsNullOrEmpty(hit.Id) ? hit.Id : CreatePersistenceKey(hit.Document);
+                if (!_persistedLogIds.Add(persistenceKey))
+                {
+                    continue;
+                }
+
+                var created = TryCreateLogEntryFromDocument(hit.Document);
+                if (created is null)
+                {
+                    continue;
+                }
+
+                var (entry, resourceView) = created.Value;
+                AddLogEntryInternal(entry, resourceView, context: null, skipUnviewedErrorIncrement: treatAsExisting);
+
+                if (_lastPersistedTimestamp is null || entry.TimeStamp > _lastPersistedTimestamp.Value)
+                {
+                    _lastPersistedTimestamp = entry.TimeStamp;
+                }
+
+                addedAny = addedAny || !treatAsExisting;
+            }
+
+            if (_persistedLogIds.Count > _otlpContext.Options.MaxLogCount * 4)
+            {
+                _persistedLogIds.Clear();
+            }
+        }
+        finally
+        {
+            _logsLock.ExitWriteLock();
+        }
+
+        if (addedAny)
+        {
+            RaiseSubscriptionChanged(_logSubscriptions);
+        }
+    }
+
+    private (OtlpLogEntry Entry, OtlpResourceView ResourceView)? TryCreateLogEntryFromDocument(Aspire.Dashboard.Otlp.Persistence.ElasticLogDocument document)
+    {
+        if (string.IsNullOrWhiteSpace(document.ServiceName))
+        {
+            return null;
+        }
+
+        var resourceKey = new ResourceKey(document.ServiceName, string.IsNullOrEmpty(document.ServiceInstanceId) ? null : document.ServiceInstanceId);
+        var (resource, isNew) = GetOrAddResource(resourceKey, uninstrumentedPeer: false);
+        if (isNew)
+        {
+            RaiseSubscriptionChanged(_resourceSubscriptions);
+        }
+
+        var attributes = new RepeatedField<KeyValue>();
+        if (document.ServiceAttributes is { Count: > 0 })
+        {
+            foreach (var attribute in document.ServiceAttributes)
+            {
+                if (string.IsNullOrWhiteSpace(attribute.Name))
+                {
+                    continue;
+                }
+
+                attributes.Add(new KeyValue
+                {
+                    Key = attribute.Name!,
+                    Value = new AnyValue { StringValue = attribute.Value ?? string.Empty }
+                });
+            }
+        }
+
+        var resourceView = resource.GetView(attributes);
+
+        var scopeAttributes = document.ScopeAttributes is { Count: > 0 }
+            ? document.ScopeAttributes
+                .Where(static a => !string.IsNullOrWhiteSpace(a.Name))
+                .Select(a => new KeyValuePair<string, string>(a.Name!, a.Value ?? string.Empty))
+                .ToArray()
+            : Array.Empty<KeyValuePair<string, string>>();
+
+        var scope = (document.ScopeName, document.ScopeVersion, scopeAttributes.Length) switch
+        {
+            (null or "", null or "", 0) => OtlpScope.Empty,
+            _ => new OtlpScope(document.ScopeName ?? string.Empty, document.ScopeVersion ?? string.Empty, scopeAttributes)
+        };
+
+        var logAttributes = document.Attributes is { Count: > 0 }
+            ? document.Attributes
+                .Where(static a => !string.IsNullOrWhiteSpace(a.Name))
+                .Select(a => new KeyValuePair<string, string>(a.Name!, a.Value ?? string.Empty))
+                .ToArray()
+            : Array.Empty<KeyValuePair<string, string>>();
+
+        var severity = Microsoft.Extensions.Logging.LogLevel.Information;
+        if (!string.IsNullOrEmpty(document.Severity))
+        {
+            if (!Enum.TryParse(document.Severity, ignoreCase: true, out severity))
+            {
+                if (int.TryParse(document.Severity, out var severityValue) && Enum.IsDefined(typeof(Microsoft.Extensions.Logging.LogLevel), severityValue))
+                {
+                    severity = (Microsoft.Extensions.Logging.LogLevel)severityValue;
+                }
+            }
+        }
+
+        var entry = new OtlpLogEntry(
+            document.Timestamp,
+            document.Flags,
+            severity,
+            document.Message ?? string.Empty,
+            document.SpanId ?? string.Empty,
+            document.TraceId ?? string.Empty,
+            document.ParentId ?? string.Empty,
+            document.OriginalFormat,
+            resourceView,
+            scope,
+            logAttributes,
+            document.LogId > 0 ? document.LogId : null);
+
+        return (entry, resourceView);
+    }
+
+    private static string CreatePersistenceKey(Aspire.Dashboard.Otlp.Persistence.ElasticLogDocument document)
+    {
+        return string.Join("|", document.Timestamp.Ticks, document.TraceId, document.SpanId, document.ParentId, document.Message, document.ServiceName, document.ServiceInstanceId);
+    }
+
     public PagedResult<OtlpLogEntry> GetLogs(GetLogsContext context)
     {
+        EnsurePersistedLogsLoaded();
+
         List<OtlpResource>? resources = null;
         if (context.ResourceKey is { } key)
         {
@@ -436,6 +638,8 @@ public sealed class TelemetryRepository : IDisposable
 
     public OtlpLogEntry? GetLog(long logId)
     {
+        EnsurePersistedLogsLoaded();
+
         _logsLock.EnterReadLock();
 
         try
@@ -458,6 +662,8 @@ public sealed class TelemetryRepository : IDisposable
 
     public List<string> GetLogPropertyKeys(ResourceKey? resourceKey)
     {
+        EnsurePersistedLogsLoaded();
+
         List<OtlpResource>? resources = null;
         if (resourceKey != null)
         {
@@ -669,6 +875,8 @@ public sealed class TelemetryRepository : IDisposable
 
     public void ClearStructuredLogs(ResourceKey? resourceKey = null)
     {
+        EnsurePersistedLogsLoaded();
+
         List<OtlpResource>? resources = null;
         if (resourceKey.HasValue)
         {
@@ -762,6 +970,8 @@ public sealed class TelemetryRepository : IDisposable
 
     public Dictionary<string, int> GetLogsFieldValues(string attributeName)
     {
+        EnsurePersistedLogsLoaded();
+
         _logsLock.EnterReadLock();
 
         var attributesValues = new Dictionary<string, int>(StringComparers.OtlpAttribute);
@@ -1220,11 +1430,11 @@ public sealed class TelemetryRepository : IDisposable
         // Throw error if there are orphaned span links.
         if (currentSpanLinks.Count > 0)
         {
-            var sb = new StringBuilder();
-            sb.AppendLine(CultureInfo.InvariantCulture, $"There are {currentSpanLinks.Count} orphaned span links.");
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"There are {currentSpanLinks.Count} orphaned span links.");
             foreach (var link in currentSpanLinks)
             {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"\tSource span ID: {link.SourceSpanId}, Target span ID: {link.SpanId}");
+                sb.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"\tSource span ID: {link.SourceSpanId}, Target span ID: {link.SpanId}");
             }
 
             throw new InvalidOperationException(sb.ToString());

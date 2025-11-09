@@ -17,6 +17,7 @@ public sealed class DashboardOptions
     public FrontendOptions Frontend { get; set; } = new();
     public ResourceServiceClientOptions ResourceServiceClient { get; set; } = new();
     public TelemetryLimitOptions TelemetryLimits { get; set; } = new();
+    public LogStorageOptions LogStorage { get; set; } = new();
     public DebugSessionOptions DebugSession { get; set; } = new();
     public UIOptions UI { get; set; } = new();
     public AIOptions AI { get; set; } = new();
@@ -377,6 +378,29 @@ public sealed class ClaimAction
 public sealed class AIOptions
 {
     public bool? Disabled { get; set; }
+}
+
+public sealed class LogStorageOptions
+{
+    public LogStorageMode Mode { get; set; } = LogStorageMode.InMemory;
+    public ElasticsearchLogStorageOptions Elasticsearch { get; set; } = new();
+}
+
+public enum LogStorageMode
+{
+    InMemory,
+    Elasticsearch
+}
+
+public sealed class ElasticsearchLogStorageOptions
+{
+    public string? Endpoint { get; set; }
+    public string? DataStream { get; set; }
+    public string? Username { get; set; }
+    public string? Password { get; set; }
+    public bool DisableServerCertificateValidation { get; set; }
+    public int InitialLoadCount { get; set; } = 10_000;
+    public int IncrementalBatchSize { get; set; } = 1_000;
 }
 
 public sealed class DebugSessionOptions

@@ -67,6 +67,34 @@ public class OtlpLogEntry
         Scope = scope;
     }
 
+    public OtlpLogEntry(
+        DateTime timeStamp,
+        uint flags,
+        LogLevel severity,
+        string message,
+        string spanId,
+        string traceId,
+        string parentId,
+        string? originalFormat,
+        OtlpResourceView resourceView,
+        OtlpScope scope,
+        KeyValuePair<string, string>[] attributes,
+        long? internalId = null)
+    {
+        InternalId = internalId ?? Interlocked.Increment(ref s_nextLogEntryId);
+        TimeStamp = timeStamp;
+        Flags = flags;
+        Severity = severity;
+        Message = message;
+        SpanId = spanId;
+        TraceId = traceId;
+        ParentId = parentId;
+        OriginalFormat = originalFormat;
+        ResourceView = resourceView;
+        Scope = scope;
+        Attributes = attributes;
+    }
+
     private static DateTime ResolveTimeStamp(LogRecord record)
     {
         // From proto docs:

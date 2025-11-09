@@ -30,6 +30,27 @@ Example JSON configuration file:
 }
 ```
 
+### Persisting Structured Logs
+
+The dashboard can persist OTLP structured logs to Elasticsearch by setting the log storage mode to `Elasticsearch`. In addition to selecting the mode, configure the connection endpoint and target data stream name. A minimal configuration looks like:
+
+```json
+{
+  "Dashboard": {
+    "LogStorage": {
+      "Mode": "Elasticsearch",
+      "Elasticsearch": {
+        "Endpoint": "http://localhost:9200",
+        "DataStream": "logs-aspire-dashboard",
+        "DisableServerCertificateValidation": true
+      }
+    }
+  }
+}
+```
+
+When Elasticsearch persistence is enabled, the dashboard writes new logs to the configured data stream and hydrates the in-memory repository on demand by querying the data stream.
+
 ### Common configuration
 
 - `ASPNETCORE_URLS` specifies one or more HTTP endpoints through which the dashboard frontend is served. The frontend endpoint is used to view the dashboard in a browser. Defaults to http://localhost:18888.

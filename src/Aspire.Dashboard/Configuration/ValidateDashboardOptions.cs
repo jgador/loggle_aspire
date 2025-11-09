@@ -167,6 +167,30 @@ public sealed class ValidateDashboardOptions : IValidateOptions<DashboardOptions
             errorMessages.Add(debugSessionParseErrorMessage);
         }
 
+        if (options.LogStorage.Mode == LogStorageMode.Elasticsearch)
+        {
+            var elastic = options.LogStorage.Elasticsearch;
+            if (string.IsNullOrWhiteSpace(elastic.Endpoint))
+            {
+                errorMessages.Add($"{DashboardConfigNames.DashboardLogStorageElasticEndpointName.ConfigKey} must be configured when log storage mode is set to '{LogStorageMode.Elasticsearch}'.");
+            }
+
+            if (string.IsNullOrWhiteSpace(elastic.DataStream))
+            {
+                errorMessages.Add($"{DashboardConfigNames.DashboardLogStorageElasticDataStreamName.ConfigKey} must be configured when log storage mode is set to '{LogStorageMode.Elasticsearch}'.");
+            }
+
+            if (elastic.InitialLoadCount <= 0)
+            {
+                errorMessages.Add($"{DashboardConfigNames.DashboardLogStorageElasticInitialLoadCountName.ConfigKey} must be greater than zero.");
+            }
+
+            if (elastic.IncrementalBatchSize <= 0)
+            {
+                errorMessages.Add($"{DashboardConfigNames.DashboardLogStorageElasticIncrementalBatchSizeName.ConfigKey} must be greater than zero.");
+            }
+        }
+
         return errorMessages.Count > 0
             ? ValidateOptionsResult.Fail(errorMessages)
             : ValidateOptionsResult.Success;

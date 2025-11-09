@@ -19,6 +19,14 @@ internal static class KnownConfigNames
     public const string DashboardFileConfigDirectory = "ASPIRE_DASHBOARD_FILE_CONFIG_DIRECTORY";
     public const string DashboardAIDisabled = "ASPIRE_DASHBOARD_AI_DISABLED";
     public const string DashboardForwardedHeadersEnabled = "ASPIRE_DASHBOARD_FORWARDEDHEADERS_ENABLED";
+    public const string DashboardLogStorageMode = "ASPIRE_DASHBOARD_LOGSTORAGE_MODE";
+    public const string DashboardLogStorageElasticEndpoint = "ASPIRE_DASHBOARD_LOGSTORAGE_ELASTIC_ENDPOINT";
+    public const string DashboardLogStorageElasticDataStream = "ASPIRE_DASHBOARD_LOGSTORAGE_ELASTIC_DATASTREAM";
+    public const string DashboardLogStorageElasticUsername = "ASPIRE_DASHBOARD_LOGSTORAGE_ELASTIC_USERNAME";
+    public const string DashboardLogStorageElasticPassword = "ASPIRE_DASHBOARD_LOGSTORAGE_ELASTIC_PASSWORD";
+    public const string DashboardLogStorageElasticDisableCertificateValidation = "ASPIRE_DASHBOARD_LOGSTORAGE_ELASTIC_DISABLE_CERT_VALIDATION";
+    public const string DashboardLogStorageElasticInitialLoadCount = "ASPIRE_DASHBOARD_LOGSTORAGE_ELASTIC_INITIAL_LOAD_COUNT";
+    public const string DashboardLogStorageElasticIncrementalBatchSize = "ASPIRE_DASHBOARD_LOGSTORAGE_ELASTIC_INCREMENTAL_BATCH_SIZE";
 
     public const string ShowDashboardResources = "ASPIRE_SHOW_DASHBOARD_RESOURCES";
     public const string ResourceServiceEndpointUrl = "ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL";
