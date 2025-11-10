@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <!-- This list of runtimes needs to match the set of runtimes specified in eng/workloads/workloads.csproj -->
@@ -47,6 +47,7 @@
   <Target Name="ReturnPackageVersion" Returns="$(PackageVersion)" />
 
   <ItemGroup>
+    <PackageReference Include="Elastic.Clients.Elasticsearch" />
     <PackageReference Include="Grpc.AspNetCore" />
     <PackageReference Include="Humanizer.Core" />
     <PackageReference Include="Microsoft.Extensions.AI" />
@@ -313,3 +314,4 @@
     <None Include="wwwroot\js\README.md" />
   </ItemGroup>
 </Project>
+

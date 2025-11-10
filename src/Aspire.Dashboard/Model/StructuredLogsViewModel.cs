@@ -1,15 +1,18 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Dashboard.Elasticsearch;
 using Aspire.Dashboard.Model.Otlp;
 using Aspire.Dashboard.Otlp.Model;
 using Aspire.Dashboard.Otlp.Storage;
+using LogLevelAlias = Microsoft.Extensions.Logging.LogLevel;
 
 namespace Aspire.Dashboard.Model;
 
 public class StructuredLogsViewModel
 {
     private readonly TelemetryRepository _telemetryRepository;
+    private readonly ILogsDataSource? _logsDataSource;
     private readonly List<FieldTelemetryFilter> _filters = new();
 
     private PagedResult<OtlpLogEntry>? _logs;
@@ -17,12 +20,13 @@ public class StructuredLogsViewModel
     private string _filterText = string.Empty;
     private int _logsStartIndex;
     private int _logsCount;
-    private LogLevel? _logLevel;
+    private LogLevelAlias? _logLevel;
     private bool _currentDataHasErrors;
 
-    public StructuredLogsViewModel(TelemetryRepository telemetryRepository)
+    public StructuredLogsViewModel(TelemetryRepository telemetryRepository, ILogsDataSource? logsDataSource = null)
     {
         _telemetryRepository = telemetryRepository;
+        _logsDataSource = logsDataSource;
     }
 
     public ResourceKey? ResourceKey { get => _resourceKey; set => SetValue(ref _resourceKey, value); }
@@ -33,11 +37,11 @@ public class StructuredLogsViewModel
     {
         _filters.Clear();
         _logs = null;
+        _currentDataHasErrors = false;
     }
 
     public void AddFilter(FieldTelemetryFilter filter)
     {
-        // Don't add duplicate filters.
         foreach (var existingFilter in _filters)
         {
             if (existingFilter.Equals(filter))
@@ -48,6 +52,7 @@ public class StructuredLogsViewModel
 
         _filters.Add(filter);
         _logs = null;
+        _currentDataHasErrors = false;
     }
 
     public bool RemoveFilter(FieldTelemetryFilter filter)
@@ -55,14 +60,16 @@ public class StructuredLogsViewModel
         if (_filters.Remove(filter))
         {
             _logs = null;
+            _currentDataHasErrors = false;
             return true;
         }
+
         return false;
     }
 
     public int StartIndex { get => _logsStartIndex; set => SetValue(ref _logsStartIndex, value); }
     public int Count { get => _logsCount; set => SetValue(ref _logsCount, value); }
-    public LogLevel? LogLevel { get => _logLevel; set => SetValue(ref _logLevel, value); }
+    public LogLevelAlias? LogLevel { get => _logLevel; set => SetValue(ref _logLevel, value); }
 
     private void SetValue<T>(ref T field, T value)
     {
@@ -73,6 +80,7 @@ public class StructuredLogsViewModel
 
         field = value;
         _logs = null;
+        _currentDataHasErrors = false;
     }
 
     public PagedResult<OtlpLogEntry> GetLogs()
@@ -80,60 +88,99 @@ public class StructuredLogsViewModel
         var logs = _logs;
         if (logs == null)
         {
-            var filters = GetFilters();
-
-            logs = _telemetryRepository.GetLogs(new GetLogsContext
-            {
-                ResourceKey = ResourceKey,
-                StartIndex = StartIndex,
-                Count = Count,
-                Filters = filters
-            });
-
-            _currentDataHasErrors = logs.Items.Any(i => i.Severity >= Microsoft.Extensions.Logging.LogLevel.Error);
+            logs = FetchLogs(StartIndex, Count, includeErrorFilter: false);
+            _logs = logs;
         }
 
         return logs;
     }
 
-    public List<TelemetryFilter> GetFilters()
-    {
-        var filters = Filters.Cast<TelemetryFilter>().ToList();;
-        if (!string.IsNullOrWhiteSpace(FilterText))
-        {
-            filters.Add(new FieldTelemetryFilter { Field = nameof(OtlpLogEntry.Message), Condition = FilterCondition.Contains, Value = FilterText });
-        }
-        // If the log level is set and it is not the bottom level, which has no effect, then add a filter.
-        if (_logLevel != null && _logLevel != Microsoft.Extensions.Logging.LogLevel.Trace)
-        {
-            filters.Add(new FieldTelemetryFilter { Field = nameof(OtlpLogEntry.Severity), Condition = FilterCondition.GreaterThanOrEqual, Value = _logLevel.Value.ToString() });
-        }
+    public bool HasErrors() => _currentDataHasErrors;
 
-        return filters;
-    }
+    public PagedResult<OtlpLogEntry> GetErrorLogs(int count) => FetchLogs(startIndex: 0, count, includeErrorFilter: true);
 
-    // First check if there were any errors in already available data. Avoid fetching data again.
-    public bool HasErrors() => _currentDataHasErrors || GetErrorLogs(count: 0).TotalItemCount > 0;
-
-    public PagedResult<OtlpLogEntry> GetErrorLogs(int count)
-    {
-        var filters = GetFilters();
-        filters.RemoveAll(f => f is FieldTelemetryFilter fieldFilter && fieldFilter.Field == nameof(OtlpLogEntry.Severity));
-        filters.Add(new FieldTelemetryFilter { Field = nameof(OtlpLogEntry.Severity), Condition = FilterCondition.GreaterThanOrEqual, Value = Microsoft.Extensions.Logging.LogLevel.Error.ToString() });
-
-        var errorLogs = _telemetryRepository.GetLogs(new GetLogsContext
-        {
-            ResourceKey = ResourceKey,
-            StartIndex = 0,
-            Count = count,
-            Filters = filters
-        });
-
-        return errorLogs;
-    }
+    public List<TelemetryFilter> GetFilters() => BuildFieldFilters(includeErrorFilter: false).Cast<TelemetryFilter>().ToList();
 
     public void ClearData()
     {
         _logs = null;
+        _currentDataHasErrors = false;
+    }
+
+    private PagedResult<OtlpLogEntry> FetchLogs(int startIndex, int count, bool includeErrorFilter)
+    {
+        var fieldFilters = BuildFieldFilters(includeErrorFilter);
+
+        if (_logsDataSource is null)
+        {
+            var context = new GetLogsContext
+            {
+                ResourceKey = ResourceKey,
+                StartIndex = startIndex,
+                Count = count,
+                Filters = fieldFilters.Cast<TelemetryFilter>().ToList()
+            };
+
+            var result = _telemetryRepository.GetLogs(context);
+            _currentDataHasErrors = result.Items.Any(log => log.IsError);
+            return result;
+        }
+
+        var parameters = new LogQueryParameters
+        {
+            ResourceKey = ResourceKey,
+            StartIndex = startIndex,
+            Count = count,
+            MessageContains = string.IsNullOrWhiteSpace(FilterText) ? null : FilterText,
+            MinimumLogLevel = includeErrorFilter ? LogLevelAlias.Error : _logLevel,
+            Filters = fieldFilters
+        };
+
+        var esResult = _logsDataSource.GetLogsAsync(parameters, CancellationToken.None).GetAwaiter().GetResult();
+        _currentDataHasErrors = esResult.Items.Any(log => log.IsError);
+        return esResult;
+    }
+
+    private List<FieldTelemetryFilter> BuildFieldFilters(bool includeErrorFilter)
+    {
+        var filters = _filters.Select(f => new FieldTelemetryFilter
+        {
+            Field = f.Field,
+            Condition = f.Condition,
+            Value = f.Value
+        }).ToList();
+
+        if (!string.IsNullOrWhiteSpace(FilterText))
+        {
+            filters.Add(new FieldTelemetryFilter
+            {
+                Field = nameof(OtlpLogEntry.Message),
+                Condition = FilterCondition.Contains,
+                Value = FilterText
+            });
+        }
+
+        if (!includeErrorFilter && _logLevel is { } level && level != LogLevelAlias.Trace)
+        {
+            filters.Add(new FieldTelemetryFilter
+            {
+                Field = nameof(OtlpLogEntry.Severity),
+                Condition = FilterCondition.GreaterThanOrEqual,
+                Value = level.ToString()
+            });
+        }
+
+        if (includeErrorFilter)
+        {
+            filters.RemoveAll(f => f.Field == nameof(OtlpLogEntry.Severity));
+            filters.Add(new FieldTelemetryFilter
+            {
+                Field = nameof(OtlpLogEntry.Severity),
+                Condition = FilterCondition.GreaterThanOrEqual,
+                Value = LogLevelAlias.Error.ToString()
+            });
+        }
+
+        return filters;
     }
 }

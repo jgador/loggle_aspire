@@ -13,6 +13,7 @@ using Aspire.Dashboard.Authentication.OtlpApiKey;
 using Aspire.Dashboard.Components;
 using Aspire.Dashboard.Components.Pages;
 using Aspire.Dashboard.Configuration;
+using Aspire.Dashboard.Elasticsearch;
 using Aspire.Dashboard.Mcp;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Model.Assistant;
@@ -176,6 +177,12 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         builder.Services.AddSingleton<IPostConfigureOptions<DashboardOptions>, PostConfigureDashboardOptions>();
         builder.Services.AddSingleton<IValidateOptions<DashboardOptions>, ValidateDashboardOptions>();
 
+        var elasticsearchLogsSection = builder.Configuration.GetSection(ElasticsearchLogsOptions.SectionName);
+        builder.Services.AddOptions<ElasticsearchLogsOptions>()
+            .Bind(elasticsearchLogsSection);
+        var elasticsearchLogsOptions = elasticsearchLogsSection.Get<ElasticsearchLogsOptions>();
+        var useElasticsearchLogs = !string.IsNullOrWhiteSpace(elasticsearchLogsOptions?.Endpoint);
+
         if (!TryGetDashboardOptions(builder, dashboardConfigSection, out var dashboardOptions, out var failureMessages))
         {
             // The options have validation failures. Write them out to the user and return a non-zero exit code.
@@ -283,9 +290,12 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         builder.Services.AddGrpc();
         builder.Services.AddSingleton<ILogPersistence, ElasticLogPersistence>();
         builder.Services.AddSingleton<TelemetryRepository>();
+        if (useElasticsearchLogs)
+        {
+            builder.Services.AddSingleton<ILogsDataSource, ElasticsearchLogsDataSource>();
+        }
         builder.Services.AddTransient<StructuredLogsViewModel>();
 
-        builder.Services.AddTransient<OtlpLogsService>();
         builder.Services.AddTransient<OtlpTraceService>();
         builder.Services.AddTransient<OtlpMetricsService>();
 
@@ -509,7 +519,6 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         // OTLP gRPC services.
         _app.MapGrpcService<OtlpGrpcMetricsService>();
         _app.MapGrpcService<OtlpGrpcTraceService>();
-        _app.MapGrpcService<OtlpGrpcLogsService>();
 
         _app.MapDashboardApi(dashboardOptions);
         _app.MapDashboardHealthChecks();
@@ -934,6 +943,5 @@ public sealed class DashboardWebApplication : IAsyncDisposable
     {
         return _app.DisposeAsync();
     }
-
     private static bool IsHttpsOrNull(BindingAddress? address) => address == null || string.Equals(address.Scheme, "https", StringComparison.Ordinal);
 }

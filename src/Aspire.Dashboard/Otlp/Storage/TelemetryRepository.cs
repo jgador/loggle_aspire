@@ -7,6 +7,8 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Aspire.Dashboard.Configuration;
 using Aspire.Dashboard.Model;
+using Aspire.Dashboard.Model.Otlp;
+using Aspire.Dashboard.Elasticsearch;
 using Aspire.Dashboard.Otlp.Model;
 using Aspire.Dashboard.Otlp.Model.MetricValues;
 using Aspire.Dashboard.Utils;
@@ -27,6 +29,7 @@ public sealed class TelemetryRepository : IDisposable
     private readonly PauseManager _pauseManager;
     private readonly IOutgoingPeerResolver[] _outgoingPeerResolvers;
     private readonly ILogger _logger;
+    private readonly ILogsDataSource? _logsDataSource;
 
     private readonly object _lock = new();
     internal TimeSpan _subscriptionMinExecuteInterval = TimeSpan.FromMilliseconds(100);
@@ -66,9 +69,10 @@ public sealed class TelemetryRepository : IDisposable
     internal List<OtlpSpanLink> SpanLinks => _spanLinks;
     internal List<Subscription> TracesSubscriptions => _tracesSubscriptions;
 
-    public TelemetryRepository(ILoggerFactory loggerFactory, IOptions<DashboardOptions> dashboardOptions, PauseManager pauseManager, IEnumerable<IOutgoingPeerResolver> outgoingPeerResolvers, Aspire.Dashboard.Otlp.Persistence.ILogPersistence? logPersistence = null)
+    public TelemetryRepository(ILoggerFactory loggerFactory, IOptions<DashboardOptions> dashboardOptions, PauseManager pauseManager, IEnumerable<IOutgoingPeerResolver> outgoingPeerResolvers, Aspire.Dashboard.Otlp.Persistence.ILogPersistence? logPersistence = null, ILogsDataSource? logsDataSource = null)
     {
         _logger = loggerFactory.CreateLogger(typeof(TelemetryRepository));
+        _logsDataSource = logsDataSource;
         _otlpContext = new OtlpContext
         {
             Logger = _logger,
@@ -600,6 +604,29 @@ public sealed class TelemetryRepository : IDisposable
 
     public PagedResult<OtlpLogEntry> GetLogs(GetLogsContext context)
     {
+        if (_logsDataSource is not null)
+        {
+            var fieldFilters = context.Filters
+                .OfType<FieldTelemetryFilter>()
+                .Select(filter => new FieldTelemetryFilter
+                {
+                    Field = filter.Field,
+                    Condition = filter.Condition,
+                    Value = filter.Value
+                })
+                .ToList();
+
+            var parameters = new LogQueryParameters
+            {
+                ResourceKey = context.ResourceKey,
+                StartIndex = context.StartIndex,
+                Count = context.Count,
+                Filters = fieldFilters
+            };
+
+            return _logsDataSource.GetLogsAsync(parameters, CancellationToken.None).GetAwaiter().GetResult();
+        }
+
         EnsurePersistedLogsLoaded();
 
         List<OtlpResource>? resources = null;

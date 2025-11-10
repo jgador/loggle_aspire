@@ -12,7 +12,6 @@ using Aspire.Dashboard.Configuration;
 using Google.Protobuf;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Primitives;
-using OpenTelemetry.Proto.Collector.Logs.V1;
 using OpenTelemetry.Proto.Collector.Metrics.V1;
 using OpenTelemetry.Proto.Collector.Trace.V1;
 
@@ -46,14 +45,6 @@ public static class OtlpHttpEndpointsBuilder
             group = group.RequireCors(CorsPolicyName);
         }
 
-        group.MapPost("logs", static (MessageBindable<ExportLogsServiceRequest> request, OtlpLogsService service) =>
-        {
-            if (request.Message == null)
-            {
-                return Results.Empty;
-            }
-            return OtlpResult.Response(service.Export(request.Message));
-        });
         group.MapPost("traces", static (MessageBindable<ExportTraceServiceRequest> request, OtlpTraceService service) =>
         {
             if (request.Message == null)
@@ -239,3 +230,4 @@ public static class OtlpHttpEndpointsBuilder
         }
     }
 }
+
