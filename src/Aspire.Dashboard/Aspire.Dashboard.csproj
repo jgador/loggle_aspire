@@ -313,5 +313,27 @@
     <EmbeddedResource Include="Mcp\Resources\aspire-64.png" />
     <None Include="wwwroot\js\README.md" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- loggle-specific requirement: keep environment appsettings for local Debug runs only -->
+  <ItemGroup Condition="'$(Configuration)'=='Debug'">
+    <Content Update="appsettings.*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)'!='Debug'">
+    <Content Update="appsettings.*.json">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
 </Project>
 
