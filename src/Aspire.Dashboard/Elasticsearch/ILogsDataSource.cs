@@ -9,4 +9,5 @@ namespace Aspire.Dashboard.Elasticsearch;
 public interface ILogsDataSource
 {
     System.Threading.Tasks.Task<PagedResult<OtlpLogEntry>> GetLogsAsync(LogQueryParameters parameters, System.Threading.CancellationToken cancellationToken);
+    System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<ResourceKey>> GetResourcesAsync(System.Threading.CancellationToken cancellationToken);
 }

@@ -32,6 +32,8 @@ public sealed class TelemetryRepository : IDisposable
     private readonly ILogsDataSource? _logsDataSource;
 
     private readonly object _lock = new();
+    private static readonly TimeSpan s_logDataSourceResourceRefreshInterval = TimeSpan.FromSeconds(30);
+    private DateTimeOffset _lastLogDataSourceResourceRefreshUtc = DateTimeOffset.MinValue;
     internal TimeSpan _subscriptionMinExecuteInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly List<Subscription> _resourceSubscriptions = new();
@@ -113,8 +115,50 @@ public sealed class TelemetryRepository : IDisposable
         return GetResourcesCore(includeUninstrumentedPeers, name);
     }
 
+    private void LoadResourcesFromLogDataSource()
+    {
+        if (_logsDataSource is null)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastLogDataSourceResourceRefreshUtc < s_logDataSourceResourceRefreshInterval)
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            now = DateTimeOffset.UtcNow;
+            if (now - _lastLogDataSourceResourceRefreshUtc < s_logDataSourceResourceRefreshInterval)
+            {
+                return;
+            }
+
+            try
+            {
+                var resourceKeys = _logsDataSource.GetResourcesAsync(CancellationToken.None).GetAwaiter().GetResult();
+                foreach (var key in resourceKeys)
+                {
+                    _resources.GetOrAdd(key, k => new OtlpResource(k.Name, k.InstanceId, uninstrumentedPeer: false, _otlpContext));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to load resources from logs data source.");
+            }
+            finally
+            {
+                _lastLogDataSourceResourceRefreshUtc = DateTimeOffset.UtcNow;
+            }
+        }
+    }
+
     private List<OtlpResource> GetResourcesCore(bool includeUninstrumentedPeers, string? name)
     {
+        LoadResourcesFromLogDataSource();
+
         IEnumerable<OtlpResource> results = _resources.Values;
         if (!includeUninstrumentedPeers)
         {

@@ -19,9 +19,20 @@ namespace Aspire.Dashboard.Elasticsearch;
 internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
 {
     private const string JsonMediaType = "application/json";
+    private const int DefaultResourceAggregationSize = 500;
     private static readonly JsonSerializerOptions s_serializerOptions = new()
     {
         PropertyNameCaseInsensitive = true
+    };
+    private static readonly string[] s_serviceNameFields = new[]
+    {
+        "serviceName",
+        "service.name"
+    };
+    private static readonly string[] s_serviceInstanceIdFields = new[]
+    {
+        "serviceInstanceId",
+        "service.instance.id"
     };
 
     private readonly HttpClient _httpClient;
@@ -93,12 +104,7 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
         ArgumentNullException.ThrowIfNull(parameters);
 
         var payload = BuildSearchPayload(parameters);
-        var searchTarget = string.IsNullOrEmpty(_logOptions.DataStream)
-            ? null
-            : _logOptions.DataStream.TrimEnd('/');
-        var requestUri = searchTarget is null
-            ? "_search"
-            : $"{searchTarget}/_search";
+        var requestUri = GetSearchEndpoint();
 
         using var content = new StringContent(payload, Encoding.UTF8, JsonMediaType);
         using var response = await _httpClient.PostAsync(requestUri, content, cancellationToken).ConfigureAwait(false);
@@ -159,16 +165,88 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
         };
     }
 
+    public async Task<IReadOnlyList<ResourceKey>> GetResourcesAsync(CancellationToken cancellationToken)
+    {
+        var requestUri = GetSearchEndpoint();
+
+        var aggregationSize = _logOptions.MaxDisplayedLogCount > 0
+            ? Math.Min(_logOptions.MaxDisplayedLogCount, DefaultResourceAggregationSize)
+            : DefaultResourceAggregationSize;
+
+        var aggregations = new JsonObject
+        {
+            ["serviceName"] = CreateTermsAggregation("serviceName", aggregationSize),
+            ["serviceNameAlt"] = CreateTermsAggregation("service.name", aggregationSize)
+        };
+
+        var root = new JsonObject
+        {
+            ["size"] = 0,
+            ["query"] = new JsonObject
+            {
+                ["match_all"] = new JsonObject()
+            },
+            ["aggs"] = aggregations
+        };
+
+        using var content = new StringContent(root.ToJsonString(new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        }), Encoding.UTF8, JsonMediaType);
+
+        using var response = await _httpClient.PostAsync(requestUri, content, cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogDebug("Elasticsearch resource aggregation request failed with status {StatusCode}: {Body}", response.StatusCode, body);
+            response.EnsureSuccessStatusCode();
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var aggregationResponse = await JsonSerializer.DeserializeAsync<ResourceAggregationResponse>(stream, s_serializerOptions, cancellationToken).ConfigureAwait(false);
+
+        var names = new HashSet<string>(Aspire.StringComparers.ResourceName);
+
+        if (aggregationResponse?.Aggregations != null)
+        {
+            foreach (var aggregation in aggregationResponse.Aggregations.Values)
+            {
+                if (aggregation?.Buckets is null)
+                {
+                    continue;
+                }
+
+                foreach (var bucket in aggregation.Buckets)
+                {
+                    if (!string.IsNullOrWhiteSpace(bucket.Key))
+                    {
+                        names.Add(bucket.Key);
+                    }
+                }
+            }
+        }
+
+        var resourceKeys = names.Select(name => new ResourceKey(name, null)).ToList();
+        resourceKeys.Sort();
+        return resourceKeys;
+    }
+
     private string BuildSearchPayload(LogQueryParameters parameters)
     {
         var mustArray = new JsonArray();
 
         if (parameters.ResourceKey is { } resourceKey)
         {
-            mustArray.Add(CreateTermQuery("serviceName.keyword", resourceKey.Name));
-            if (!string.IsNullOrEmpty(resourceKey.InstanceId))
+            if (TryCreateMultiFieldEqualsQuery(resourceKey.Name, s_serviceNameFields, out var serviceQuery))
             {
-                mustArray.Add(CreateTermQuery("serviceInstanceId.keyword", resourceKey.InstanceId));
+                mustArray.Add(serviceQuery);
+            }
+
+            if (!string.IsNullOrEmpty(resourceKey.InstanceId) &&
+                TryCreateMultiFieldEqualsQuery(resourceKey.InstanceId, s_serviceInstanceIdFields, out var instanceQuery))
+            {
+                mustArray.Add(instanceQuery);
             }
         }
 
@@ -288,6 +366,126 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
         });
     }
 
+    private string GetSearchEndpoint()
+    {
+        var searchTarget = string.IsNullOrEmpty(_logOptions.DataStream)
+            ? null
+            : _logOptions.DataStream.TrimEnd('/');
+
+        return searchTarget is null ? "_search" : $"{searchTarget}/_search";
+    }
+
+    private static JsonObject CreateTermsAggregation(string field, int size)
+    {
+        return new JsonObject
+        {
+            ["terms"] = new JsonObject
+            {
+                ["field"] = field,
+                ["size"] = size,
+                ["order"] = new JsonObject
+                {
+                    ["_count"] = "desc"
+                }
+            }
+        };
+    }
+
+    private static bool TryCreateMultiFieldEqualsQuery(string value, string[] fields, out JsonObject query)
+    {
+        query = null!;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var filter = new FieldTelemetryFilter
+        {
+            Condition = FilterCondition.Equals,
+            Value = value
+        };
+
+        return TryCreateMultiFieldQuery(fields, filter, out query, exact: true);
+    }
+
+    private static bool TryCreateMultiFieldQuery(string[] fields, FieldTelemetryFilter filter, out JsonObject query, bool exact)
+    {
+        query = null!;
+        if (fields is null || fields.Length == 0)
+        {
+            return false;
+        }
+
+        List<JsonObject>? perFieldQueries = null;
+        foreach (var field in fields)
+        {
+            var fieldQuery = CreateQueryForField(field, filter, exact);
+            if (fieldQuery is not null)
+            {
+                perFieldQueries ??= new List<JsonObject>();
+                perFieldQueries.Add(fieldQuery);
+            }
+        }
+
+        if (perFieldQueries is null || perFieldQueries.Count == 0)
+        {
+            return false;
+        }
+
+        if (perFieldQueries.Count == 1)
+        {
+            query = perFieldQueries[0];
+            return true;
+        }
+
+        var shouldArray = new JsonArray();
+        foreach (var fieldQuery in perFieldQueries)
+        {
+            shouldArray.Add(fieldQuery);
+        }
+
+        query = new JsonObject
+        {
+            ["bool"] = new JsonObject
+            {
+                ["should"] = shouldArray,
+                ["minimum_should_match"] = 1
+            }
+        };
+
+        return true;
+    }
+
+    private static JsonObject? CreateQueryForField(string field, FieldTelemetryFilter filter, bool exact)
+    {
+        return filter.Condition switch
+        {
+            FilterCondition.Equals => CreateEqualsQuery(field, filter.Value, exact),
+            FilterCondition.Contains => CreateContainsQueryForField(field, filter.Value, exact),
+            _ => null
+        };
+    }
+
+    private static JsonObject CreateEqualsQuery(string field, string value, bool exact)
+    {
+        if (exact || field.EndsWith(".keyword", StringComparison.Ordinal))
+        {
+            return CreateTermQuery(field, value);
+        }
+
+        return CreateMatchPhraseQuery(field, value);
+    }
+
+    private static JsonObject CreateContainsQueryForField(string field, string value, bool exact)
+    {
+        if (exact)
+        {
+            return CreateContainsQuery(field, value);
+        }
+
+        return CreateMatchQuery(field, value);
+    }
+
     private int GetEffectiveMaxLogCount()
     {
         var telemetryLimit = _limits.MaxLogCount;
@@ -350,7 +548,7 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
             nameof(OtlpLogEntry.TraceId) or KnownStructuredLogFields.TraceIdField => TryCreateTextQuery("traceId.keyword", filter, out query, exact: true),
             nameof(OtlpLogEntry.SpanId) or KnownStructuredLogFields.SpanIdField => TryCreateTextQuery("spanId.keyword", filter, out query, exact: true),
             nameof(OtlpLogEntry.OriginalFormat) or KnownStructuredLogFields.OriginalFormatField => TryCreateTextQuery("originalFormat", filter, out query),
-            KnownResourceFields.ServiceNameField => TryCreateTextQuery("serviceName.keyword", filter, out query, exact: true),
+            KnownResourceFields.ServiceNameField => TryCreateMultiFieldQuery(s_serviceNameFields, filter, out query, exact: true),
             KnownStructuredLogFields.CategoryField => TryCreateTextQuery("scopeName.keyword", filter, out query, exact: true),
             nameof(OtlpLogEntry.Severity) => TryCreateSeverityQuery(filter, out query),
             _ => false
@@ -543,6 +741,24 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+
+    private sealed class ResourceAggregationResponse
+    {
+        [JsonPropertyName("aggregations")]
+        public Dictionary<string, TermsAggregationResult>? Aggregations { get; set; }
+    }
+
+    private sealed class TermsAggregationResult
+    {
+        [JsonPropertyName("buckets")]
+        public List<TermsBucket> Buckets { get; set; } = new();
+    }
+
+    private sealed class TermsBucket
+    {
+        [JsonPropertyName("key")]
+        public string? Key { get; set; }
     }
 
     private sealed class SearchResponse
