@@ -398,9 +398,11 @@ public sealed class ElasticsearchLogStorageOptions
     public string? DataStream { get; set; }
     public string? Username { get; set; }
     public string? Password { get; set; }
+    public string? ApiKey { get; set; }
     public bool DisableServerCertificateValidation { get; set; }
     public int InitialLoadCount { get; set; } = 10_000;
     public int IncrementalBatchSize { get; set; } = 1_000;
+    public int MaxDisplayedLogCount { get; set; } = 200;
 }
 
 public sealed class DebugSessionOptions

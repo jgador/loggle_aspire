@@ -37,9 +37,11 @@ internal static class DashboardConfigNames
     public static readonly ConfigName DashboardLogStorageElasticDataStreamName = new("Dashboard:LogStorage:Elasticsearch:DataStream", KnownConfigNames.DashboardLogStorageElasticDataStream);
     public static readonly ConfigName DashboardLogStorageElasticUsernameName = new("Dashboard:LogStorage:Elasticsearch:Username", KnownConfigNames.DashboardLogStorageElasticUsername);
     public static readonly ConfigName DashboardLogStorageElasticPasswordName = new("Dashboard:LogStorage:Elasticsearch:Password", KnownConfigNames.DashboardLogStorageElasticPassword);
+    public static readonly ConfigName DashboardLogStorageElasticApiKeyName = new("Dashboard:LogStorage:Elasticsearch:ApiKey", KnownConfigNames.DashboardLogStorageElasticApiKey);
     public static readonly ConfigName DashboardLogStorageElasticDisableCertificateValidationName = new("Dashboard:LogStorage:Elasticsearch:DisableServerCertificateValidation", KnownConfigNames.DashboardLogStorageElasticDisableCertificateValidation);
     public static readonly ConfigName DashboardLogStorageElasticInitialLoadCountName = new("Dashboard:LogStorage:Elasticsearch:InitialLoadCount", KnownConfigNames.DashboardLogStorageElasticInitialLoadCount);
     public static readonly ConfigName DashboardLogStorageElasticIncrementalBatchSizeName = new("Dashboard:LogStorage:Elasticsearch:IncrementalBatchSize", KnownConfigNames.DashboardLogStorageElasticIncrementalBatchSize);
+    public static readonly ConfigName DashboardLogStorageElasticMaxDisplayedLogCountName = new("Dashboard:LogStorage:Elasticsearch:MaxDisplayedLogCount", KnownConfigNames.DashboardLogStorageElasticMaxDisplayedLogCount);
     public static readonly ConfigName ResourceServiceClientAuthModeName = new("Dashboard:ResourceServiceClient:AuthMode", "DASHBOARD__RESOURCESERVICECLIENT__AUTHMODE");
     public static readonly ConfigName ResourceServiceClientCertificateSourceName = new("Dashboard:ResourceServiceClient:ClientCertificate:Source", "DASHBOARD__RESOURCESERVICECLIENT__CLIENTCERTIFICATE__SOURCE");
     public static readonly ConfigName ResourceServiceClientCertificateFilePathName = new("Dashboard:ResourceServiceClient:ClientCertificate:FilePath", "DASHBOARD__RESOURCESERVICECLIENT__CLIENTCERTIFICATE__FILEPATH");

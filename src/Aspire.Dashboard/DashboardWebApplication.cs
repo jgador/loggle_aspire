@@ -177,11 +177,9 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         builder.Services.AddSingleton<IPostConfigureOptions<DashboardOptions>, PostConfigureDashboardOptions>();
         builder.Services.AddSingleton<IValidateOptions<DashboardOptions>, ValidateDashboardOptions>();
 
-        var elasticsearchLogsSection = builder.Configuration.GetSection(ElasticsearchLogsOptions.SectionName);
-        builder.Services.AddOptions<ElasticsearchLogsOptions>()
-            .Bind(elasticsearchLogsSection);
-        var elasticsearchLogsOptions = elasticsearchLogsSection.Get<ElasticsearchLogsOptions>();
-        var useElasticsearchLogs = !string.IsNullOrWhiteSpace(elasticsearchLogsOptions?.Endpoint);
+        var logStorageSection = dashboardConfigSection.GetSection(nameof(DashboardOptions.LogStorage));
+        var logStorageOptions = logStorageSection.Get<LogStorageOptions>() ?? new LogStorageOptions();
+        var useElasticsearchLogs = logStorageOptions.Mode == LogStorageMode.Elasticsearch;
 
         if (!TryGetDashboardOptions(builder, dashboardConfigSection, out var dashboardOptions, out var failureMessages))
         {

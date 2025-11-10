@@ -218,7 +218,7 @@ internal sealed class ElasticLogPersistence : ILogPersistence, IDisposable
             throw new InvalidOperationException($"{nameof(options.Endpoint)} must be configured when log storage mode is set to Elasticsearch.");
         }
 
-        var key = string.Join("|", options.Endpoint, options.Username, options.Password, options.DisableServerCertificateValidation);
+        var key = string.Join("|", options.Endpoint, options.Username, options.Password, options.ApiKey, options.DisableServerCertificateValidation);
 
         lock (_httpClientLock)
         {
@@ -256,6 +256,12 @@ internal sealed class ElasticLogPersistence : ILogPersistence, IDisposable
 
     private static void ConfigureRequest(HttpRequestMessage request, Aspire.Dashboard.Configuration.ElasticsearchLogStorageOptions options)
     {
+        if (!string.IsNullOrEmpty(options.ApiKey))
+        {
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("ApiKey", options.ApiKey);
+            return;
+        }
+
         if (!string.IsNullOrEmpty(options.Username) && !string.IsNullOrEmpty(options.Password))
         {
             var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{options.Username}:{options.Password}"));

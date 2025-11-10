@@ -25,28 +25,38 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
     };
 
     private readonly HttpClient _httpClient;
-    private readonly ElasticsearchLogsOptions _options;
+    private readonly ElasticsearchLogStorageOptions _logOptions;
     private readonly ILogger<ElasticsearchLogsDataSource> _logger;
     private readonly TelemetryLimitOptions _limits;
     private readonly OtlpContext _otlpContext;
 
     public ElasticsearchLogsDataSource(
-        IOptions<ElasticsearchLogsOptions> options,
         IOptions<DashboardOptions> dashboardOptions,
         ILogger<ElasticsearchLogsDataSource> logger)
     {
-        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(dashboardOptions);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _options = options.Value ?? new ElasticsearchLogsOptions();
-        if (string.IsNullOrWhiteSpace(_options.Endpoint))
+        var dashboard = dashboardOptions.Value ?? new DashboardOptions();
+        _limits = dashboard.TelemetryLimits;
+        _logOptions = dashboard.LogStorage.Elasticsearch ?? new ElasticsearchLogStorageOptions();
+
+        if (dashboard.LogStorage.Mode != LogStorageMode.Elasticsearch)
         {
-            throw new InvalidOperationException("ElasticsearchLogs.Endpoint configuration value is required.");
+            throw new InvalidOperationException("Elasticsearch log storage mode must be enabled to use the Elasticsearch logs data source.");
+        }
+
+        if (string.IsNullOrWhiteSpace(_logOptions.Endpoint))
+        {
+            throw new InvalidOperationException($"{nameof(ElasticsearchLogStorageOptions.Endpoint)} configuration value is required when log storage mode is set to Elasticsearch.");
+        }
+
+        if (string.IsNullOrWhiteSpace(_logOptions.DataStream))
+        {
+            throw new InvalidOperationException($"{nameof(ElasticsearchLogStorageOptions.DataStream)} configuration value is required when log storage mode is set to Elasticsearch.");
         }
 
         _logger = logger;
-        _limits = dashboardOptions.Value.TelemetryLimits;
 
         _otlpContext = new OtlpContext
         {
@@ -55,24 +65,24 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
         };
 
         var handler = new HttpClientHandler();
-        if (_options.DisableCertificateValidation)
+        if (_logOptions.DisableServerCertificateValidation)
         {
             handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
         }
 
         _httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri(_options.Endpoint, UriKind.Absolute),
+            BaseAddress = new Uri(_logOptions.Endpoint, UriKind.Absolute),
             Timeout = TimeSpan.FromSeconds(30)
         };
 
-        if (!string.IsNullOrEmpty(_options.ApiKey))
+        if (!string.IsNullOrEmpty(_logOptions.ApiKey))
         {
-            _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("ApiKey", _options.ApiKey);
+            _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("ApiKey", _logOptions.ApiKey);
         }
-        else if (!string.IsNullOrEmpty(_options.Username))
+        else if (!string.IsNullOrEmpty(_logOptions.Username))
         {
-            var credentialBytes = Encoding.UTF8.GetBytes($"{_options.Username}:{_options.Password ?? string.Empty}");
+            var credentialBytes = Encoding.UTF8.GetBytes($"{_logOptions.Username}:{_logOptions.Password ?? string.Empty}");
             var headerValue = System.Convert.ToBase64String(credentialBytes);
             _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", headerValue);
         }
@@ -83,9 +93,12 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
         ArgumentNullException.ThrowIfNull(parameters);
 
         var payload = BuildSearchPayload(parameters);
-        var requestUri = string.IsNullOrEmpty(_options.Index)
+        var searchTarget = string.IsNullOrEmpty(_logOptions.DataStream)
+            ? null
+            : _logOptions.DataStream.TrimEnd('/');
+        var requestUri = searchTarget is null
             ? "_search"
-            : $"{_options.Index.TrimEnd('/')}/_search";
+            : $"{searchTarget}/_search";
 
         using var content = new StringContent(payload, Encoding.UTF8, JsonMediaType);
         using var response = await _httpClient.PostAsync(requestUri, content, cancellationToken).ConfigureAwait(false);
@@ -123,14 +136,20 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
             }
         }
 
-        var total = searchResponse.Hits.Total?.Value ?? items.Count;
-        if (total < 0)
+        var totalFromHits = searchResponse.Hits.Total?.Value ?? items.Count;
+        if (totalFromHits < 0)
         {
-            total = items.Count;
+            totalFromHits = items.Count;
         }
 
-        var cappedTotal = total > int.MaxValue ? int.MaxValue : (int)total;
-        var isFull = total >= _limits.MaxLogCount;
+        var effectiveMaxLogCount = GetEffectiveMaxLogCount();
+        var limitedTotal = effectiveMaxLogCount > 0
+            ? Math.Min(totalFromHits, effectiveMaxLogCount)
+            : totalFromHits;
+
+        var cappedTotal = limitedTotal > int.MaxValue ? int.MaxValue : (int)limitedTotal;
+        var telemetryLimit = _limits.MaxLogCount;
+        var isFull = telemetryLimit > 0 && totalFromHits >= telemetryLimit;
 
         return new PagedResult<OtlpLogEntry>
         {
@@ -233,10 +252,32 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
             }
         };
 
+        var startIndex = Math.Max(parameters.StartIndex, 0);
+        var count = Math.Max(parameters.Count, 0);
+        var effectiveMaxLogCount = GetEffectiveMaxLogCount();
+
+        if (effectiveMaxLogCount <= 0)
+        {
+            startIndex = 0;
+            count = 0;
+        }
+        else if (startIndex >= effectiveMaxLogCount)
+        {
+            count = 0;
+        }
+        else
+        {
+            var remaining = effectiveMaxLogCount - startIndex;
+            if (count > remaining)
+            {
+                count = remaining;
+            }
+        }
+
         var root = new JsonObject
         {
-            ["from"] = parameters.StartIndex,
-            ["size"] = parameters.Count,
+            ["from"] = startIndex,
+            ["size"] = count,
             ["sort"] = sort,
             ["query"] = queryNode
         };
@@ -245,6 +286,24 @@ internal sealed class ElasticsearchLogsDataSource : ILogsDataSource, IDisposable
         {
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         });
+    }
+
+    private int GetEffectiveMaxLogCount()
+    {
+        var telemetryLimit = _limits.MaxLogCount;
+        var displayLimit = _logOptions.MaxDisplayedLogCount;
+
+        if (telemetryLimit <= 0)
+        {
+            return displayLimit;
+        }
+
+        if (displayLimit <= 0)
+        {
+            return telemetryLimit;
+        }
+
+        return Math.Min(telemetryLimit, displayLimit);
     }
 
     private static JsonObject CreateTermQuery(string field, string value)

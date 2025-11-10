@@ -42,14 +42,15 @@ The dashboard can persist OTLP structured logs to Elasticsearch by setting the l
       "Elasticsearch": {
         "Endpoint": "http://localhost:9200",
         "DataStream": "logs-aspire-dashboard",
-        "DisableServerCertificateValidation": true
+        "DisableServerCertificateValidation": true,
+        "MaxDisplayedLogCount": 200
       }
     }
   }
 }
 ```
 
-When Elasticsearch persistence is enabled, the dashboard writes new logs to the configured data stream and hydrates the in-memory repository on demand by querying the data stream.
+When Elasticsearch persistence is enabled, the dashboard writes new logs to the configured data stream and hydrates the in-memory repository on demand by querying the data stream. The same configuration drives the dashboard’s Elasticsearch log data source; use `MaxDisplayedLogCount` to control how many of the newest logs are displayed in the UI.
 
 ### Common configuration
 

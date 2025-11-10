@@ -189,6 +189,11 @@ public sealed class ValidateDashboardOptions : IValidateOptions<DashboardOptions
             {
                 errorMessages.Add($"{DashboardConfigNames.DashboardLogStorageElasticIncrementalBatchSizeName.ConfigKey} must be greater than zero.");
             }
+
+            if (elastic.MaxDisplayedLogCount <= 0)
+            {
+                errorMessages.Add($"{DashboardConfigNames.DashboardLogStorageElasticMaxDisplayedLogCountName.ConfigKey} must be greater than zero.");
+            }
         }
 
         return errorMessages.Count > 0
